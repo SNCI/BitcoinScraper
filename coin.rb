@@ -1,8 +1,9 @@
 require 'mechanize'
-require 'active_record'
+require 'nokogiri'
 require 'sqlite3'
 require 'zip'
 require 'csv'
+require 'pry'
 
 database = File.new("db.db", "a")
 database.close
@@ -19,39 +20,46 @@ CREATE TABLE IF NOT EXISTS bitcoin(
 SQL
 db.execute(sql_command)
 
-url = "http://api.bitcoincharts.com/v1/csv/"
+url = "index.html"
 agent = Mechanize.new
 agent.pluggable_parser.default = Mechanize::Download
-
-page = agent.get(url)
-links = page.links
+page = File.open(url) { |f| Nokogiri::HTML(f) }
+temp = page.css('a')
+links = []
+temp.each do |l|
+  out = {}
+  out[:url] = "https://api.bitcoincharts.com/v1/csv/" + "#{l.inner_text}"
+  temp = l.inner_text[/[^.]+/]
+  out[:market] = temp[0...-3]
+  out[:currency] = temp[-3..-1]
+  if out[:currency] != nil && out[:market] != ""
+   links << out
+ end
+end
 
 links.each do |link|
-  temp = link.text[/[^.]+/]
-  market = temp[0...-3]
-  currency = temp[-3..-1]
-
-  agent.get(link).save('tempfile.csv.gz')
-  temp = %x[ #{'gunzip -c tempfile.csv.gz'} ]
-  sleep(25)
-  CSV.parse(temp) do |row|
-    sql_command = <<-SQL
-    INSERT INTO bitcoin(
-     unixtime,
-     price,
-     amount,
-     market,
-     currency
-   )
-    VALUES
-     (
-     "#{row[0]}",
-     "#{row[1]}",
-     "#{row[2]}",
-     "#{market}",
-     "#{currency}");
-     SQL
-     db.execute(sql_command)
-  end
-  File.delete('tempfile.csv.gz')
+  agent.get(link[:url]).save('tempfile.csv.gz')
+  sleep 5
+  %x[  #{'gzcat tempfile.csv.gz >tempfile.csv'} ]
+  CSV.foreach("tempfile.csv") do |row|
+      sql_command = <<-SQL
+      INSERT INTO bitcoin(
+       unixtime,
+       price,
+       amount,
+       market,
+       currency
+     )
+      VALUES
+       (
+       "#{row[0]}",
+       "#{row[1]}",
+       "#{row[2]}",
+       "#{link[:market]}",
+       "#{link[:currency]}");
+       SQL
+       db.execute(sql_command)
+    end
+ File.delete('tempfile.csv.gz')
+ File.delete('tempfile.csv')
 end

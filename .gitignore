@@ -1,0 +1,4 @@
+*.db
+*.csv
+*.gz
+*.db-journal
